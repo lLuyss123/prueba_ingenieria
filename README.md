@@ -75,7 +75,7 @@ Sigue estos pasos exactamente en el orden indicado.
 
 Copia el archivo de ejemplo y ajusta los valores si es necesario:
 
-```bash
+```powershell
 Copy-Item .env.example .env
 ```
 
@@ -117,11 +117,24 @@ Compose usa la imagen indicada por `AIRFLOW_IMAGE_NAME` en `.env` y levanta:
 | `airflow-dag-processor` | —     | Procesador de DAGs           |
 | `airflow-triggerer`     | —     | Manejador de triggers        |
 
-Espera a que todos los contenedores estén en estado **healthy**:
+Comprueba el estado de los servicios:
 
-```bash
+```powershell
 docker compose ps
 ```
+
+Airflow y la base de metadatos muestran `healthy` cuando pasan sus healthchecks.
+`postgres-analytics` no tiene uno configurado, por lo que su estado aparecerá
+como `Up`; verifica que acepte conexiones con:
+
+```powershell
+docker compose exec postgres-analytics pg_isready -U admin_dw -d data_warehouse
+```
+
+La imagen usada por los contenedores es la definida en `AIRFLOW_IMAGE_NAME`.
+`uv sync` instala dependencias en el entorno local del proyecto, pero Compose
+no lee `uv.lock` ni monta `.venv`; asegúrate de que la imagen configurada tenga
+las dependencias que necesita el DAG (Pandas, NumPy, PyArrow y psycopg2).
 
 ---
 
@@ -322,7 +335,7 @@ ORDER BY return_rate_pct DESC
 LIMIT 10;
 ```
 
-### 4. Países con más transacciones y ticket promedio
+### 4. Países con más facturas de venta y ticket promedio
 
 ```sql
 WITH invoice_sales AS (
@@ -330,20 +343,14 @@ WITH invoice_sales AS (
     FROM analytics.fact_transactions
     WHERE record_type = 'sale'
     GROUP BY country, invoice_no
-),
-invoice_counts AS (
-    SELECT country, COUNT(DISTINCT invoice_no) AS transaction_count
-    FROM analytics.fact_transactions
-    GROUP BY country
 )
 SELECT
-    c.country,
-    c.transaction_count,
-    ROUND(AVG(s.ticket), 2) AS average_sales_ticket
-FROM invoice_counts AS c
-LEFT JOIN invoice_sales AS s USING (country)
-GROUP BY c.country, c.transaction_count
-ORDER BY c.transaction_count DESC;
+    country,
+    COUNT(*) AS sales_invoice_count,
+    ROUND(AVG(ticket), 2) AS average_sales_ticket
+FROM invoice_sales
+GROUP BY country
+ORDER BY sales_invoice_count DESC;
 ```
 
 ### 5. Comportamiento de clientes identificados y sin ID
@@ -419,7 +426,7 @@ WHERE schema_name IN ('analytics', 'audit');
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Cantidad ≤ 0**        | Toda transacción con cantidad menor o igual a cero se trata como devolución o ajuste, nunca como venta.                                              |
 | **Precio unitario ≤ 0** | En una venta válida, el precio unitario no puede ser cero ni negativo. Los registros que incumplan esta condición se rechazan con motivo registrado. |
-| **Fechas a UTC**         | Todos los campos de fecha se estandarizan a UTC antes de cargarlos al repositorio analítico.                                                          |
+| **Fechas a UTC**         | `InvoiceDate` se interpreta como UTC (la fuente no aporta zona horaria) y se guarda como `transaction_at` en UTC.                                     |
 | **Códigos de producto** | Se normalizan a mayúsculas y sin espacios antes de cruzarlos con la dimensión de productos.                                                             |
 | **Categoría**            | Se asigna mediante reglas heurísticas sobre la descripción canónica; lo no identificado queda como `Sin categoría`.                                    |
 | **Revenue bruto**        | Se calcula como `Quantity × UnitPrice`.                                                                                                             |
@@ -543,6 +550,9 @@ erDiagram
     }
 ```
 
+Las líneas entre las tablas representan relaciones lógicas por `stock_code`.
+El DDL actual no declara claves foráneas para imponerlas en PostgreSQL.
+
 ### Idempotencia
 
 `max_active_runs=1` evita que dos cargas de este DAG se solapen. Cada carga
@@ -560,12 +570,11 @@ alineados con la carga que finaliza correctamente.
 
 ## ⚠️ Solución de problemas comunes
 
-| Problema                                                            | Causa                                             | Solución                                                                                              |
-| ------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `schema "analytics" does not exist`                               | Las tablas no se crearon antes de ejecutar el DAG | Ejecuta `sql/init/tablas.sql` en DBeaver o reinicia el contenedor `postgres-analytics` (Paso 3)    |
-| `Variable.get() got an unexpected keyword argument 'default_var'` | Versión de Airflow 3.x incompatibles             | Ya corregido en `first_dag.py` (usa argumento posicional, no `default_var=`)                       |
-| El DAG no aparece en la UI                                          | Los contenedores no están levantados             | Ejecuta `docker compose up -d` y espera a que estén healthy                                         |
-| Tarea `load` falla                                                | Falta de conexión a PostgreSQL                   | Verifica que `postgres-analytics` esté en puerto 5433 y que las credenciales de `.env` coincidan |
+| Problema | Causa | Solución |
+| --- | --- | --- |
+| `schema "analytics" does not exist` | El esquema no se creó en el volumen existente. | Ejecuta `sql/init/tablas.sql` en DBeaver o con el comando del Paso 3. Reiniciar el contenedor no vuelve a ejecutar la inicialización del volumen. |
+| El DAG no aparece en la UI | El procesador no ha cargado el archivo o hay un error de importación. | Comprueba `docker compose ps` y los logs de `airflow-dag-processor`; después consulta `airflow dags list` dentro del scheduler. |
+| Tarea `load` falla | Conexión o credenciales de PostgreSQL incorrectas. | Verifica `analytics_db`, las credenciales de `.env` y que `postgres-analytics` acepte conexiones en el puerto 5433. |
 
 ---
 
@@ -589,7 +598,3 @@ flowchart LR
 | `load.py`      | Conexión y carga a PostgreSQL                                                                                |
 
 ---
-
-## 📄 Licencia
-
-Uso interno – DataMart S.A.S.
