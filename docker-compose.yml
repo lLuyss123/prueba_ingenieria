@@ -1,0 +1,177 @@
+# Basic Airflow cluster configuration with LocalExecutor and PostgreSQL.
+#
+# WARNING: This configuration is for local development. Do not use it in a production deployment.
+#
+# Variables soportadas:
+#
+# AIRFLOW_IMAGE_NAME           - Imagen de Docker usada para correr Airflow.
+#                                Default: apache/airflow:3.1.5
+# AIRFLOW_UID                  - User ID dentro de los contenedores de Airflow.
+#                                Default: 50000
+# AIRFLOW_PROJ_DIR             - Ruta base donde se montan los volúmenes.
+#                                Default: .
+# _AIRFLOW_WWW_USER_USERNAME   - Usuario administrador.
+#                                Default: airflow
+# _AIRFLOW_WWW_USER_PASSWORD   - Contraseña del administrador.
+#                                Default: airflow
+# _PIP_ADDITIONAL_REQUIREMENTS - Requerimientos PIP adicionales al iniciar los contenedores.
+#                                Úsalo SOLO para pruebas rápidas. Para desarrollo real,
+#                                extiende la imagen oficial.
+#                                Default: ''
+---
+x-airflow-common:
+  &airflow-common
+  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.1.5}
+  env_file:
+    - ${ENV_FILE_PATH:-.env}
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    # CONEXIÓN DINÁMICA: Toma la URL del .env
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_DB_CONN}
+    # SEGURIDAD: Inyecta la llave maestra desde el .env
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+    AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    
+    # CONEXIÓN AUTOMÁTICA: Crea la conexión "analytics_db" hacia tu Data Warehouse sin usar la UI
+    AIRFLOW_CONN_ANALYTICS_DB: postgresql://${DW_USER}:${DW_PASSWORD}@postgres-analytics:5432/${DW_DB}
+    
+    # VARIABLE AUTOMÁTICA: Registra la ruta de los CSV para que tus DAGs la usen
+    AIRFLOW_VAR_RAW_CSV_PATH: '/opt/airflow/data/raw'
+    AIRFLOW_VAR_PROCESSED_PATH: '/opt/airflow/data/processed'
+    PYTHONPATH: '/opt/airflow/src'
+
+  volumes:
+    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
+    - ${AIRFLOW_PROJ_DIR:-.}/src:/opt/airflow/src
+    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
+    - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
+    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
+    # NUEVO VOLUMEN: Puente para que Airflow lea y escriba los CSVs locales
+    - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/airflow/data
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+
+services:
+  # 1. Base de datos de Metadatos (Exclusiva para Airflow)
+  postgres:
+    image: postgres:16
+    # PUERTO EXPUESTO: Para que puedas revisarla en DBeaver si necesitas depurar
+    ports:
+      - "5434:5432"
+    environment:
+      # VARIABLES DINÁMICAS: Remueve las credenciales hardcodeadas
+      POSTGRES_USER: ${AIRFLOW_DB_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME}
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      # DEPENDIENTE DEL ENV: Verifica usando el usuario correcto
+      test: ["CMD", "pg_isready", "-U", "${AIRFLOW_DB_USER}"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  # 2. Base de datos Analítica (Data Warehouse para tu pipeline - Conexión a Power BI)
+  postgres-analytics:
+    image: postgres:16
+    ports:
+      - "5433:5432" # Expuesto localmente en el 5433 para evitar colisiones
+    environment:
+      # VARIABLES DINÁMICAS
+      POSTGRES_USER: ${DW_USER}
+      POSTGRES_PASSWORD: ${DW_PASSWORD}
+      POSTGRES_DB: ${DW_DB}
+    volumes:
+      - postgres-analytics-volume:/var/lib/postgresql/data
+      # INICIALIZACIÓN AUTOMÁTICA: Crea tablas base al levantar por primera vez
+      - ./sql/init:/docker-entrypoint-initdb.d
+    restart: always
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+
+volumes:
+  postgres-db-volume:
+  postgres-analytics-volume:

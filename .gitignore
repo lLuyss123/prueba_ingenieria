@@ -1,0 +1,22 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Python environments and cache
+.venv/
+__pycache__/
+*.py[cod]
+
+# Airflow runtime files
+logs/
+
+# Generated pipeline outputs (raw input CSVs are intentionally retained in this project)
+data/processed/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+!data/processed/.gitkeep

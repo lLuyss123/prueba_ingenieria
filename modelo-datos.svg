@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="640" viewBox="0 0 1160 640" role="img" aria-labelledby="title description">
+  <title id="title">Modelo analítico del DataMart</title>
+  <desc id="description">Dimensión de productos relacionada lógicamente con las transacciones y el resumen diario; tabla de auditoría para registros rechazados.</desc>
+  <style>
+    text { font-family: Arial, sans-serif; fill: #172033; }
+    .title { font-size: 25px; font-weight: 700; }
+    .table-title { font-size: 17px; font-weight: 700; fill: #ffffff; }
+    .field { font-size: 14px; }
+    .note { font-size: 12px; fill: #475569; }
+    .box { fill: #ffffff; stroke: #64748b; stroke-width: 1.5; rx: 8; }
+    .head { fill: #2563eb; }
+    .audit-head { fill: #64748b; }
+    .relation { fill: none; stroke: #475569; stroke-width: 2; stroke-dasharray: 7 5; }
+  </style>
+  <text class="title" x="40" y="38">Modelo lógico del DataMart</text>
+
+  <path class="relation" d="M370 165 H430"/>
+  <path class="relation" d="M370 220 H410 V435 H835 V220 H850"/>
+  <text class="note" x="375" y="153">stock_code</text>
+  <text class="note" x="835" y="425">stock_code</text>
+
+  <rect class="box" x="40" y="70" width="330" height="190"/>
+  <path class="head" d="M48 70 H362 Q370 70 370 78 V108 H40 V78 Q40 70 48 70 Z"/>
+  <text class="table-title" x="58" y="95">analytics.dim_products</text>
+  <text class="field" x="58" y="135">PK  stock_code</text>
+  <text class="field" x="58" y="164">canonical_description</text>
+  <text class="field" x="58" y="193">category</text>
+  <text class="field" x="58" y="222">is_active, created_at, updated_at</text>
+
+  <rect class="box" x="430" y="55" width="370" height="365"/>
+  <path class="head" d="M438 55 H792 Q800 55 800 63 V93 H430 V63 Q430 55 438 55 Z"/>
+  <text class="table-title" x="448" y="80">analytics.fact_transactions</text>
+  <text class="field" x="448" y="120">PK  transaction_id</text>
+  <text class="field" x="448" y="147">run_id, source_file, source_row_index</text>
+  <text class="field" x="448" y="174">invoice_no, stock_code, description</text>
+  <text class="field" x="448" y="201">quantity, unit_price, gross_revenue</text>
+  <text class="field" x="448" y="228">record_type</text>
+  <text class="field" x="448" y="255">transaction_at, transaction_date</text>
+  <text class="field" x="448" y="282">customer_id, is_guest, country</text>
+  <text class="field" x="448" y="309">canonical_description</text>
+  <text class="note" x="448" y="380">Una fila por transacción aceptada.</text>
+
+  <rect class="box" x="850" y="75" width="270" height="285"/>
+  <path class="head" d="M858 75 H1112 Q1120 75 1120 83 V113 H850 V83 Q850 75 858 75 Z"/>
+  <text class="table-title" x="868" y="100">analytics.daily_product_revenue</text>
+  <text class="field" x="868" y="140">PK  summary_id</text>
+  <text class="field" x="868" y="167">transaction_date, stock_code</text>
+  <text class="field" x="868" y="194">sales_quantity</text>
+  <text class="field" x="868" y="221">returns_quantity, net_quantity</text>
+  <text class="field" x="868" y="248">gross_revenue</text>
+  <text class="field" x="868" y="275">returns_adjustment, net_revenue</text>
+  <text class="note" x="868" y="329">Resumen por producto y día.</text>
+
+  <rect class="box" x="430" y="460" width="370" height="145"/>
+  <path class="audit-head" d="M438 460 H792 Q800 460 800 468 V498 H430 V468 Q430 460 438 460 Z"/>
+  <text class="table-title" x="448" y="485">audit.rejected_records</text>
+  <text class="field" x="448" y="525">PK  rejection_id</text>
+  <text class="field" x="448" y="552">run_id, source_file, source_row_index</text>
+  <text class="field" x="448" y="579">rejection_reason, raw_record (JSONB)</text>
+</svg>
